@@ -7,6 +7,9 @@ This project was built as a hands-on exercise to practice **AI Enablement** skil
 
 ---
 
+<img width="1900" height="929" alt="image" src="https://github.com/user-attachments/assets/3617e1d7-35c8-4636-b855-e6c2c98ca3cf" />
+
+
 ## ✨ What this agent does
 
 Given a free-text customer support message, the agent:
