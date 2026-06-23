@@ -1,0 +1,265 @@
+# AI Support Triage Agent
+
+AI-powered support triage agent that classifies incoming tickets, detects automation opportunities, and generates draft responses using Claude.  
+Instrumented end-to-end with Langfuse for LLM observability, and shipped with a minimal Streamlit UI.
+
+This project was built as a hands-on exercise to practice **AI Enablement** skills: LLM integration, prompt engineering, workflow design, observability, and container-ready deployment.
+
+---
+
+## ✨ What this agent does
+
+Given a free-text customer support message, the agent:
+
+1. **Classifies the ticket**
+   - `urgency`: `high | medium | low`
+   - `category`: `bug | billing | feature | onboarding`
+   - `sentiment`: `positive | neutral | negative`
+
+2. **Detects AI automation opportunities**
+   - `automation_opportunity`: `true | false`
+   - Simple heuristic based on ticket type and tone (good candidates for FAQ/RAG or templated responses)
+
+3. **Generates a draft response**
+   - Uses Claude (e.g. `claude-3.5-sonnet` or `claude-3.5-sonnet-20240620`, depending on your account)
+   - Response is empathetic, concise and action-oriented
+   - Exposed as `draft_response`
+
+4. **Assigns a confidence score**
+   - `confidence`: float between 0 and 1
+   - Encodes how confident the model is in this triage
+
+5. **Traces everything to Langfuse**
+   - Each triage call becomes a trace with:
+     - Input ticket
+     - Parsed JSON output
+     - Latency (ms)
+     - Token usage (input/output)
+     - A stable `trace_id` that is surfaced in the UI
+
+6. **Collects user feedback**
+   - The UI lets a human rater give a 1–5 star score
+   - Feedback is sent back to Langfuse as a `user-feedback` score on the same trace
+
+This mirrors a realistic AI feature that could live inside a support tool: scoped, observable, and improvable over time.
+
+---
+
+## 🧱 Architecture
+
+**Tech stack**
+
+- **LLM**: Anthropic Claude (via `anthropic` Python SDK)
+- **Backend**: FastAPI + Uvicorn
+- **UI**: Streamlit
+- **Observability**: Langfuse (self-hosted on `localhost:3000`)
+- **Orchestration / Dev Agent**: Claude Code
+- **Containerization**: Docker + Docker Compose
+- **Config**: `.env` + `python-dotenv`
+
+**High-level flow**
+
+```text
+[User] → Streamlit UI → FastAPI /triage → Claude API
+                           ↓
+                        Langfuse (trace)
+                           ↓
+                      /feedback endpoint
+                           ↓
+                      Langfuse (score)
+```
+
+---
+
+## 📁 Project structure
+
+```text
+ai-support-triage-agent/
+├── CLAUDE.md              # Project instructions for Claude Code (conventions, rules, structure)
+├── Dockerfile             # API image (python:3.11 + FastAPI + Uvicorn)
+├── docker-compose.yml     # api:8000 + ui:8501, ready to point at host Langfuse
+├── requirements.txt       # Python dependencies
+├── .env.example           # Template for local environment variables (no secrets)
+├── .gitignore             # Ignores .env and other local artifacts
+├── app/
+│   ├── __init__.py
+│   ├── main.py            # FastAPI app: /health, /triage, /feedback
+│   ├── agent.py           # Core triage logic, Claude + Langfuse integration
+│   ├── models.py          # Pydantic models: TicketRequest, TriageResult, FeedbackRequest
+│   └── prompts.py         # System prompt + user prompt builder
+└── ui/
+    ├── Dockerfile         # Streamlit image
+    └── streamlit_app.py   # Demo UI: ticket form → triage result → 1–5 star feedback
+```
+
+---
+
+## ⚙️ Setup
+
+### 1. Clone the repo
+
+```bash
+git clone https://github.com/dieghost96/ai-support-triage-agent.git
+cd ai-support-triage-agent
+```
+
+### 2. Create your `.env`
+
+Copy the example file and fill in your own keys:
+
+```bash
+cp .env.example .env
+```
+
+Then edit `.env`:
+
+```env
+ANTHROPIC_API_KEY=sk-ant-...
+LANGFUSE_SECRET_KEY=sk-lf-...
+LANGFUSE_PUBLIC_KEY=pk-lf-...
+LANGFUSE_BASE_URL=http://localhost:3000
+LANGFUSE_HOST=http://localhost:3000
+LANGFUSE_DEBUG=True
+```
+
+> `.env` is **not** committed to Git. Only `.env.example` lives in the repo.
+
+### 3. Install dependencies (local dev)
+
+Requires Python 3.11+ and Node/Docker if you want to use Claude Code and containers.
+
+```bash
+pip install -r requirements.txt
+```
+
+### 4. Run Langfuse (self-hosted)
+
+Follow the official Langfuse Docker Compose setup and run it on `localhost:3000`:
+
+- Docs: https://langfuse.com/self-hosting/deployment/docker-compose
+
+Create a project inside Langfuse, generate API keys and use them in `.env` as shown above.
+
+---
+
+## 🚀 Running the app (no Docker)
+
+In two terminals:
+
+**Terminal 1 — FastAPI backend**
+
+```bash
+uvicorn app.main:app --reload --port 8000
+```
+
+**Terminal 2 — Streamlit UI**
+
+```bash
+streamlit run ui/streamlit_app.py --server.port 8501
+```
+
+Then open:
+
+- API docs: http://localhost:8000/docs  
+- UI: http://localhost:8501  
+- Langfuse: http://localhost:3000
+
+Submit a ticket from the UI and you should see:
+
+- A structured triage result with urgency/category/sentiment/automation opportunity/confidence
+- A draft response generated by Claude
+- A `trace_id` surfaced in the UI
+- A trace created in Langfuse under your project
+
+---
+
+## 🐳 Running with Docker Compose
+
+Once Langfuse is running on the host (port 3000):
+
+```bash
+cp .env.example .env   # if not done already
+
+
+This will start:
+
+- `api` on http://localhost:8000
+- `ui` on http://localhost:8501
+
+The containers reach Langfuse via `http://host.docker.internal:3000`.
+
+---
+
+## 🧠 Implementation details
+
+### Prompts
+
+Prompts are centralized in `app/prompts.py`:
+
+- `build_system_prompt()` sets the agent role, JSON output contract and constraints.
+- `build_triage_prompt(ticket_text)` injects the raw ticket text and asks Claude to fill the JSON schema.
+
+The system prompt explicitly instructs Claude to:
+
+- Return **valid JSON only** (no markdown).
+- Fill all required fields.
+- Avoid hallucinating policy or refund decisions beyond what a support agent would say.
+
+### JSON robustness
+
+Some models occasionally return JSON wrapped in markdown fences like:
+
+```json
+```json
+{ "urgency": "high", ... }
+```
+```
+
+To handle this, `_run_triage_generation` uses a small helper:
+
+- `_extract_json(raw: str)` strips fences, optional `json` language tags, and slices between the first `{` and last `}` before calling `json.loads`.
+
+This makes the triage resilient to formatting variations without hiding errors.
+
+### Langfuse integration
+
+The project uses the Langfuse Python SDK (v2.x) with decorator-based instrumentation:
+
+- `@observe(name="ticket-triage")` on the high-level `triage()` function
+- `@observe(name="triage-classification", as_type="generation")` on the LLM call function
+
+Inside those functions, we use `langfuse_context` to:
+
+- Attach inputs/outputs to the trace
+- Record latency and token usage
+- Get the current `trace_id` and surface it in the API response
+
+`submit_feedback()` uses a low-level `Langfuse` client to write a `user-feedback` score for a given `trace_id`.
+
+---
+
+## 🧪 What you can extend next
+
+Ideas for future iterations:
+
+- Add more granular categories (refund, account access, technical incident, etc.)
+- Add an explicit “RAG candidate” flag when the ticket looks answerable from a docs knowledge base
+- Introduce evaluators in Langfuse to automatically score response quality or routing correctness
+- Add authentication and per-user trace filtering
+- Hook into a real ticketing system API (e.g., Zendesk / Intercom) instead of a toy UI
+
+---
+
+## 💼 Why this project exists
+
+This repo was built to demonstrate practical, end-to-end **AI Enablement** skills:
+
+- Scoping an AI feature that solves a real workflow problem (support triage)
+- Integrating with a production-grade LLM (Claude)
+- Designing prompts and output schemas that are robust and debuggable
+- Adding observability with Langfuse (traces + scores)
+- Providing a minimal but realistic UI for human-in-the-loop review
+- Keeping secrets out of version control and preparing for containerized deployment
+
+If you’re interested in how this could be extended or integrated into your own support tooling, feel free to open an issue or reach out.
+
