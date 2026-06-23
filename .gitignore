@@ -1,0 +1,19 @@
+# Python artifacts
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Virtual environments
+.env/
+venv/
+.venv/
+
+# Local environment variables
+.env
+
+# Streamlit
+.streamlit/
+
+# VS Code
+.vscode/
